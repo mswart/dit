@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import Data.ByteArray (convert)
+import Data.UUID.Types (UUID)
 import Crypto.Hash (hash, Digest, SHA384)
 import Control.Monad.State as State
 import qualified Data.ByteString as ByteString
@@ -12,6 +13,8 @@ import Database.LevelDB.Base as LevelDB
 import Database.LevelDB.Internal (unsafeClose)
 import Database.LevelDB.Iterator (withIter)
 import Database.LevelDB.Streaming (keySlice, KeyRange(..), Direction(..))
+import qualified Database.PostgreSQL.Simple as PG
+import qualified Database.PostgreSQL.Simple.Time as PGTime
 import Numeric (showOct)
 import System.Directory (listDirectory, setCurrentDirectory)
 import System.Environment (getArgs)
@@ -46,7 +49,6 @@ processEntry dir state entry = do
             else return state
 
 
-
 walkRecursive :: FilePath -> CommitState -> IO (CommitState)
 walkRecursive path state = do
     entries <- listDirectory path
@@ -56,14 +58,25 @@ walkRecursive path state = do
 commit :: [String] -> IO ()
 commit [dbdir, name, dir] = do
     setCurrentDirectory dir
-    db <- LevelDB.open dbdir def{createIfMissing=True}
-    knownBlobs <- buildBlobList db
-    putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs)
+    ldb <- LevelDB.open dbdir def{createIfMissing=True}
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+
+    putStrLn $ "Loading cache of known blobs ..."
+    knownBlobs <- buildBlobList ldb
+    putStrLn $ "\tcurrently distinced known blobs: " ++ (show $ HashSet.size $ knownBlobs)
+
+    [PG.Only uuid] <- PG.returning pgc "INSERT INTO systems (name) VALUES (?) RETURNING id" [PG.Only name]
+    putStrLn $ "Defined system " ++ name ++ " - " ++ (show $ (uuid :: UUID))
+
     (batch, knownBlobs') <- walkRecursive "." ([], knownBlobs)
+
     putStrLn $ "Commit new blobs to LevelDB"
-    LevelDB.write db def batch
+    LevelDB.write ldb def batch
+
     putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs')
-    unsafeClose db
+
+    unsafeClose ldb
+    PG.close pgc
 
 
 buildBlobList :: LevelDB.DB -> IO (BlobList)
@@ -79,9 +92,20 @@ listBlobs [dbdir] = do
     unsafeClose db
 
 
+printSystems :: (UUID, String, PGTime.ZonedTimestamp) -> IO ()
+printSystems (id, name, commited_at) = do
+    putStrLn $ (show id) ++ " \"" ++ name ++ "\" " ++ (show commited_at)
+
+listSystems :: [String] -> IO ()
+listSystems [] = do
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+    PG.forEach_ pgc "SELECT id, name, commited_at FROM systems ORDER BY commited_AT ASC" printSystems
+
+
 dispatch :: [(String, [String] -> IO ())]
 dispatch =  [ ("commit", commit),
-              ("list-blobs", listBlobs)
+              ("list-blobs", listBlobs),
+              ("list-systems", listSystems)
             ]
 
 
