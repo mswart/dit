@@ -12,7 +12,7 @@ import System.Posix.Files
 calcFileHash :: FilePath -> IO String
 calcFileHash path = do
     contents <- B.readFile path
-    return $ show (hash contents :: Digest SHA2)
+    return $ show (hash contents :: Digest SHA384)
 
 listDirectory :: FilePath -> IO [FilePath]
 listDirectory path =
