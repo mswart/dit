@@ -14,11 +14,6 @@ calcFileHash path = do
     contents <- B.readFile path
     return $ show (hash contents :: Digest SHA384)
 
-listDirectory :: FilePath -> IO [FilePath]
-listDirectory path =
-    (filter f) <$> (getDirectoryContents path)
-    where f filename = filename /= "." && filename /= ".."
-
 processEntry :: FilePath -> FilePath -> IO ()
 processEntry dir entry = do
     let path = combine dir entry
