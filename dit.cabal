@@ -19,6 +19,6 @@ executable dit
   main-is:             Main.hs
   -- other-modules:
   -- other-extensions:
-  build-depends:       base >=4.8 && <4.9, directory >= 1.2.5, filepath, unix, cryptonite, bytestring, leveldb-haskell, transformers, data-default, memory, unordered-containers, mtl, postgresql-simple, uuid-types
+  build-depends:       base >=4.8 && <4.9, directory >= 1.2.5, filepath, unix, cryptonite, bytestring, leveldb-haskell, transformers, data-default, memory, unordered-containers, mtl, postgresql-simple, uuid-types, time
   hs-source-dirs:      src
   default-language:    Haskell2010

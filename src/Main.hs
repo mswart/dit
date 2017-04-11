@@ -2,6 +2,8 @@
 
 import Data.ByteArray (convert)
 import Data.UUID.Types (UUID)
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
 import Crypto.Hash (hash, Digest, SHA384)
 import Control.Monad.State as State
 import qualified Data.ByteString as ByteString
@@ -20,39 +22,49 @@ import System.Directory (listDirectory, setCurrentDirectory)
 import System.Environment (getArgs)
 import System.FilePath
 import System.Posix.Files
+import System.Posix.Types
 
 
 type BlobList = HashSet.HashSet ByteString.ByteString
-type CommitState = ([LevelDB.BatchOp], BlobList)
+type CommitState = ([LevelDB.BatchOp], [FileRow], BlobList)
+type FileRow = (UUID, FilePath, Int, Int, Int, UTCTime, UTCTime, Int, Int, PG.Binary ByteString.ByteString)
 
-processRegularFile :: FilePath -> CommitState -> IO CommitState
-processRegularFile path (batch, blobs) = do
+
+convertTime :: EpochTime -> UTCTime
+convertTime t =
+    posixSecondsToUTCTime (realToFrac t :: POSIXTime)
+
+
+processRegularFile :: UUID -> FilePath -> FileStatus -> CommitState -> IO CommitState
+processRegularFile system_id path stat (batch, inserts, blobs) = do
     contents <- ByteString.readFile path
     let fileHash = convert (hash contents :: Digest SHA384)
+    let (_:path1) = path
+    let newRow = (system_id, path1, fromEnum $ fileMode stat, fromEnum $ fileOwner stat, fromEnum $ fileGroup stat, convertTime $ modificationTime stat, convertTime $ statusChangeTime stat, fromEnum $ fileSize stat, 0, PG.Binary fileHash)
     if HashSet.member fileHash blobs
-        then return (batch, blobs)
+        then return (batch, inserts, blobs)
         else do
             return $ (LevelDB.Put (convert fileHash) contents:batch,
+                      newRow:inserts,
                       HashSet.insert (convert fileHash) blobs)
 
 
-processEntry :: FilePath -> CommitState -> FilePath -> IO (CommitState)
-processEntry dir state entry = do
+processEntry :: UUID -> FilePath -> CommitState -> FilePath -> IO (CommitState)
+processEntry system_id dir state entry = do
     let path = combine dir entry
     stat <- getSymbolicLinkStatus path
     let (_:path1) = path
-    putStrLn $ path1 ++ "\t\t uid=" ++ (show (fileOwner stat)) ++ ", gid=" ++ (show (fileGroup stat)) ++ ", mode=" ++ (showOct (fileMode stat) "") ++ ", size=" ++ (show (fileSize stat)) ++ ", mtime=" ++ (show (modificationTime stat))
     if isDirectory stat
-        then walkRecursive path state
+        then walkRecursive system_id path state
         else if isRegularFile stat
-            then processRegularFile path state
+            then processRegularFile system_id path stat state
             else return state
 
 
-walkRecursive :: FilePath -> CommitState -> IO (CommitState)
-walkRecursive path state = do
+walkRecursive :: UUID -> FilePath -> CommitState -> IO (CommitState)
+walkRecursive system_id path state = do
     entries <- listDirectory path
-    foldM (processEntry path) state entries
+    foldM (processEntry system_id path) state entries
 
 
 commit :: [String] -> IO ()
@@ -65,13 +77,16 @@ commit [dbdir, name, dir] = do
     knownBlobs <- buildBlobList ldb
     putStrLn $ "\tcurrently distinced known blobs: " ++ (show $ HashSet.size $ knownBlobs)
 
-    [PG.Only uuid] <- PG.returning pgc "INSERT INTO systems (name) VALUES (?) RETURNING id" [PG.Only name]
-    putStrLn $ "Defined system " ++ name ++ " - " ++ (show $ (uuid :: UUID))
+    [PG.Only id] <- PG.returning pgc "INSERT INTO systems (name) VALUES (?) RETURNING id" [PG.Only name]
+    putStrLn $ "Defined system " ++ name ++ " - " ++ (show id)
 
-    (batch, knownBlobs') <- walkRecursive "." ([], knownBlobs)
+    (batch, inserts, knownBlobs') <- walkRecursive id "." ([], [], knownBlobs)
 
     putStrLn $ "Commit new blobs to LevelDB"
     LevelDB.write ldb def batch
+
+    putStrLn $ "Insert files into PostgreSQL"
+    PG.executeMany pgc "INSERT INTO files (system_id, path, mode, uid, gid, ctime, mtime, size, rdev, blob) VALUES (?,?,?,?,?,?,?,?,?,?)" inserts
 
     putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs')
 

@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE systems (
 	id uuid DEFAULT uuid_generate_v4() NOT NULL,
 	name character varying NOT NULL UNIQUE,
-	commited_at timestamp with time zone DEFAULT current_timestamp() NOT NULL
+	commited_at timestamp with time zone DEFAULT current_timestamp NOT NULL,
 	PRIMARY KEY (id)
 );
 
