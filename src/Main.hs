@@ -27,7 +27,7 @@ import System.Posix.Types
 
 type BlobList = HashSet.HashSet ByteString.ByteString
 type CommitState = ([LevelDB.BatchOp], [FileRow], BlobList)
-type FileRow = (UUID, FilePath, Int, Int, Int, UTCTime, UTCTime, Int, Int, PG.Binary ByteString.ByteString)
+type FileRow = (UUID, FilePath, Int, Int, Int, UTCTime, UTCTime, Maybe Int, Maybe Int, Maybe (PG.Binary ByteString.ByteString))
 
 
 convertTime :: EpochTime -> UTCTime
@@ -40,7 +40,7 @@ processRegularFile system_id path stat (batch, inserts, blobs) = do
     contents <- ByteString.readFile path
     let fileHash = convert (hash contents :: Digest SHA384)
     let (_:path1) = path
-    let newRow = (system_id, path1, fromEnum $ fileMode stat, fromEnum $ fileOwner stat, fromEnum $ fileGroup stat, convertTime $ modificationTime stat, convertTime $ statusChangeTime stat, fromEnum $ fileSize stat, 0, PG.Binary fileHash)
+    let newRow = (system_id, path1, fromEnum $ fileMode stat, fromEnum $ fileOwner stat, fromEnum $ fileGroup stat, convertTime $ modificationTime stat, convertTime $ statusChangeTime stat, Nothing, Just $ fromEnum $ fileSize stat, Just $ PG.Binary fileHash)
     if HashSet.member fileHash blobs
         then return (batch, inserts, blobs)
         else do
@@ -86,7 +86,7 @@ commit [dbdir, name, dir] = do
     LevelDB.write ldb def batch
 
     putStrLn $ "Insert files into PostgreSQL"
-    PG.executeMany pgc "INSERT INTO files (system_id, path, mode, uid, gid, ctime, mtime, size, rdev, blob) VALUES (?,?,?,?,?,?,?,?,?,?)" inserts
+    PG.executeMany pgc "INSERT INTO files (system_id, path, mode, uid, gid, ctime, mtime, rdev, size, blob) VALUES (?,?,?,?,?,?,?,?,?,?)" inserts
 
     putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs')
 
