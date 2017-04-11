@@ -21,41 +21,48 @@ import System.Posix.Files
 
 type BlobList = HashSet.HashSet ByteString.ByteString
 
-processRegularFile :: LevelDB.DB -> FilePath -> IO String
-processRegularFile db path = do
+processRegularFile :: LevelDB.DB -> FilePath -> BlobList -> IO BlobList
+processRegularFile db path blobs = do
     contents <- ByteString.readFile path
-    let fileHash = hash contents :: Digest SHA384
-    LevelDB.put db def (convert fileHash) contents
-    return $ show fileHash
+    let fileHash = convert (hash contents :: Digest SHA384)
+    if HashSet.member fileHash blobs
+        then do
+            putStrLn $ "\t skip blob - already known: " ++ (show fileHash)
+            return blobs
+        else do
+            putStrLn $ "\t adding new blob: " ++ (show fileHash)
+            LevelDB.put db def (convert fileHash) contents
+            return $ HashSet.insert (convert fileHash) blobs
 
 
-processEntry :: LevelDB.DB -> FilePath -> FilePath -> IO ()
-processEntry db dir entry = do
+processEntry :: LevelDB.DB -> FilePath -> BlobList -> FilePath -> IO (BlobList)
+processEntry db dir blobs entry = do
     let path = combine dir entry
     stat <- getSymbolicLinkStatus path
     let (_:path1) = path
     putStrLn $ path1 ++ "\t\t uid=" ++ (show (fileOwner stat)) ++ ", gid=" ++ (show (fileGroup stat)) ++ ", mode=" ++ (showOct (fileMode stat) "") ++ ", size=" ++ (show (fileSize stat)) ++ ", mtime=" ++ (show (modificationTime stat))
     if isDirectory stat
-        then walkRecursive db path
-        else return ()
-    if isRegularFile stat
-        then do
-            fileHash <- processRegularFile db path
-            putStrLn $ "\t\t\t\t hash=" ++ fileHash
-        else return ()
+        then walkRecursive db path blobs
+        else if isRegularFile stat
+            then processRegularFile db path blobs
+            else return blobs
 
 
-walkRecursive :: LevelDB.DB -> FilePath -> IO ()
-walkRecursive db path = do
+
+walkRecursive :: LevelDB.DB -> FilePath -> BlobList -> IO (BlobList)
+walkRecursive db path blobs = do
     entries <- listDirectory path
-    mapM_ (processEntry db path) entries
+    foldM (processEntry db path) blobs entries
 
 
 commit :: [String] -> IO ()
 commit [dbdir, name, dir] = do
-    db <- LevelDB.open dbdir def{createIfMissing=True}
     setCurrentDirectory dir
-    walkRecursive db "."
+    db <- LevelDB.open dbdir def{createIfMissing=True}
+    knownBlobs <- buildBlobList db
+    putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs)
+    knownBlobs' <- walkRecursive  db "." knownBlobs
+    putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs')
     unsafeClose db
 
 
