@@ -28,7 +28,18 @@ import System.Posix.Types
 
 type BlobList = HashSet.HashSet ByteString.ByteString
 type CommitState = ([LevelDB.BatchOp], [FileRow], BlobList)
-type FileRow = (UUID, FilePath, Int, Int, Int, UTCTime, UTCTime, Maybe Int, Maybe Int, Maybe (PG.Binary ByteString.ByteString))
+type FileRow = (
+        UUID, {- system_id -}
+        FilePath,  {- path -}
+        Int, {- mode -}
+        Int, {- uid -}
+        Int, {- gid -}
+        UTCTime, {- ctime -}
+        UTCTime, {- mtime -}
+        Maybe Int, {- rdev -}
+        Maybe Int, {- size -}
+        Maybe (PG.Binary ByteString.ByteString) {- blob -}
+    )
 
 
 convertTime :: EpochTime -> UTCTime
@@ -70,7 +81,8 @@ processTypedEntry system_id path stat (batch, inserts, blobs)
     {- named pipe and socket are runtime objects, no need to record them: -}
     | isNamedPipe stat = return (batch, inserts, blobs)
     | isSocket stat = return (batch, inserts, blobs)
-    where addIfNew system_id path stat contents batch inserts blobs = if HashSet.member fileHash blobs
+    where addIfNew system_id path stat contents batch inserts blobs =
+            if HashSet.member fileHash blobs
             then (batch, newRow:inserts, blobs)
             else do
                 (LevelDB.Put fileHash contents:batch,
@@ -101,23 +113,29 @@ commit [dbdir, name, dir] = do
 
     putStrLn $ "Loading cache of known blobs ..."
     knownBlobs <- buildBlobList ldb
-    putStrLn $ "\tcurrently distinced known blobs: " ++ (show $ HashSet.size $ knownBlobs)
+    putStrLn $ "\tcurrently distinced known blobs: "
+         ++ (show $ HashSet.size $ knownBlobs)
 
-    [PG.Only id] <- PG.returning pgc "INSERT INTO systems (name) VALUES (?) RETURNING id" [PG.Only name]
+    [PG.Only id] <- PG.returning pgc "INSERT INTO systems (name)\
+                                      \ VALUES (?) RETURNING id" [PG.Only name]
     putStrLn $ "Defined system " ++ name ++ " - " ++ (show id)
 
     root_stat <- getSymbolicLinkStatus "."
     let root_row = buildFileRow id "./" root_stat Nothing
 
-    (batch, inserts, knownBlobs') <- walkRecursive id "." ([], [root_row], knownBlobs)
+    (batch, inserts, knownBlobs')
+         <- walkRecursive id "." ([], [root_row], knownBlobs)
 
     putStrLn $ "Commit new blobs to LevelDB"
     LevelDB.write ldb def batch
 
     putStrLn $ "Insert files into PostgreSQL"
-    PG.executeMany pgc "INSERT INTO files (system_id, path, mode, uid, gid, ctime, mtime, rdev, size, blob) VALUES (?,?,?,?,?,?,?,?,?,?)" inserts
+    PG.executeMany pgc "INSERT INTO files \
+        \ (system_id, path, mode, uid, gid, ctime, mtime, rdev, size, blob) \
+        \ VALUES (?,?,?,?,?,?,?,?,?,?)" inserts
 
-    putStrLn $ "Number distinced known blobs = " ++ (show $ HashSet.size $ knownBlobs')
+    putStrLn $ "Number distinced known blobs = "
+         ++ (show $ HashSet.size $ knownBlobs')
 
     unsafeClose ldb
     PG.close pgc
@@ -125,7 +143,8 @@ commit [dbdir, name, dir] = do
 
 buildBlobList :: LevelDB.DB -> IO (BlobList)
 buildBlobList db = withIter db def $ \ iter ->
-        SM.foldl' (flip HashSet.insert) (HashSet.empty :: BlobList) $ keySlice iter AllKeys Asc
+        SM.foldl' (flip HashSet.insert) (HashSet.empty :: BlobList)
+             $ keySlice iter AllKeys Asc
 
 
 listBlobs :: [String] -> IO ()
@@ -138,12 +157,16 @@ listBlobs [dbdir] = do
 
 printSystems :: (UUID, String, PGTime.ZonedTimestamp, Int) -> IO ()
 printSystems (id, name, commited_at, file_count) = do
-    putStrLn $ (show id) ++ "  |  \"" ++ name ++ "\"  |  " ++ (show commited_at) ++ "  |  " ++ (show file_count) ++ " files"
+    putStrLn $ (show id) ++ "  |  \"" ++ name
+         ++ "\"  |  " ++ (show commited_at)
+         ++ "  |  " ++ (show file_count) ++ " files"
 
 listSystems :: [String] -> IO ()
 listSystems [] = do
     pgc <- PG.connectPostgreSQL "dbname=dit"
-    PG.forEach_ pgc "SELECT id, name, commited_at, (SELECT count(*) FROM files WHERE files.system_id = systems.id) FROM systems ORDER BY commited_AT ASC" printSystems
+    PG.forEach_ pgc "SELECT id, name, commited_at, \
+        \(SELECT count(*) FROM files WHERE files.system_id = systems.id) \
+        \FROM systems ORDER BY commited_AT ASC" printSystems
 
 
 dispatch :: [(String, [String] -> IO ())]
