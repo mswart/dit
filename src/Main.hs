@@ -7,6 +7,7 @@ import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
 import Crypto.Hash (hash, Digest, SHA384)
 import Control.Monad.State as State
 import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Char8 as C
 import Data.Default (def)
 import qualified Data.Foldable as F
 import qualified Data.HashSet as HashSet
@@ -35,30 +36,55 @@ convertTime t =
     posixSecondsToUTCTime (realToFrac t :: POSIXTime)
 
 
-processRegularFile :: UUID -> FilePath -> FileStatus -> CommitState -> IO CommitState
-processRegularFile system_id path stat (batch, inserts, blobs) = do
-    contents <- ByteString.readFile path
-    let fileHash = convert (hash contents :: Digest SHA384)
-    let (_:path1) = path
-    let newRow = (system_id, path1, fromEnum $ fileMode stat, fromEnum $ fileOwner stat, fromEnum $ fileGroup stat, convertTime $ modificationTime stat, convertTime $ statusChangeTime stat, Nothing, Just $ fromEnum $ fileSize stat, Just $ PG.Binary fileHash)
-    if HashSet.member fileHash blobs
-        then return (batch, inserts, blobs)
-        else do
-            return $ (LevelDB.Put (convert fileHash) contents:batch,
-                      newRow:inserts,
-                      HashSet.insert (convert fileHash) blobs)
+buildFileRow :: UUID -> FilePath -> FileStatus -> Maybe ByteString.ByteString -> FileRow
+buildFileRow system_id path stat fileHash =
+    (system_id, path1, mode, uid, gid, mtime, atime, rdev, size, blob)
+    where (_:path1) = path
+          mode = fromEnum $ fileMode stat
+          uid = fromEnum $ fileOwner stat
+          gid = fromEnum $ fileGroup stat
+          mtime = convertTime $ modificationTime stat
+          atime = convertTime $ statusChangeTime stat
+          stat_rdev = fromEnum $ specialDeviceID stat
+          rdev = if stat_rdev == 0 then Nothing else Just stat_rdev
+          size = Just $ fromEnum $ fileSize stat
+          blob = fmap PG.Binary fileHash
+
+
+processTypedEntry :: UUID -> FilePath -> FileStatus -> CommitState -> IO CommitState
+processTypedEntry system_id path stat (batch, inserts, blobs)
+    | isRegularFile stat = do
+        contents <- ByteString.readFile path
+        return $ addIfNew system_id path stat contents batch inserts blobs
+    | isDirectory stat = do
+        let newRow = buildFileRow system_id path stat Nothing
+            new_state = (batch, newRow:inserts, blobs)
+        walkRecursive system_id path new_state
+    | isSymbolicLink stat = do
+        linkContents <- readSymbolicLink path
+        let contents = C.pack linkContents
+        return $ addIfNew system_id path stat contents batch inserts blobs
+    | isBlockDevice stat || isCharacterDevice stat = do
+        let newRow = buildFileRow system_id path stat Nothing
+        return (batch, newRow:inserts, blobs)
+    {- named pipe and socket are runtime objects, no need to record them: -}
+    | isNamedPipe stat = return (batch, inserts, blobs)
+    | isSocket stat = return (batch, inserts, blobs)
+    where addIfNew system_id path stat contents batch inserts blobs = if HashSet.member fileHash blobs
+            then (batch, newRow:inserts, blobs)
+            else do
+                (LevelDB.Put fileHash contents:batch,
+                 newRow:inserts,
+                 HashSet.insert fileHash blobs)
+            where fileHash = convert (hash contents :: Digest SHA384)
+                  newRow = buildFileRow system_id path stat (Just fileHash)
 
 
 processEntry :: UUID -> FilePath -> CommitState -> FilePath -> IO (CommitState)
 processEntry system_id dir state entry = do
     let path = combine dir entry
     stat <- getSymbolicLinkStatus path
-    let (_:path1) = path
-    if isDirectory stat
-        then walkRecursive system_id path state
-        else if isRegularFile stat
-            then processRegularFile system_id path stat state
-            else return state
+    processTypedEntry system_id path stat state
 
 
 walkRecursive :: UUID -> FilePath -> CommitState -> IO (CommitState)
@@ -80,7 +106,10 @@ commit [dbdir, name, dir] = do
     [PG.Only id] <- PG.returning pgc "INSERT INTO systems (name) VALUES (?) RETURNING id" [PG.Only name]
     putStrLn $ "Defined system " ++ name ++ " - " ++ (show id)
 
-    (batch, inserts, knownBlobs') <- walkRecursive id "." ([], [], knownBlobs)
+    root_stat <- getSymbolicLinkStatus "."
+    let root_row = buildFileRow id "./" root_stat Nothing
+
+    (batch, inserts, knownBlobs') <- walkRecursive id "." ([], [root_row], knownBlobs)
 
     putStrLn $ "Commit new blobs to LevelDB"
     LevelDB.write ldb def batch
