@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+import Data.Bits
 import Data.ByteArray (convert)
 import Data.UUID.Types (UUID)
 import Data.Time (UTCTime)
@@ -19,7 +20,7 @@ import Database.LevelDB.Streaming (keySlice, KeyRange(..), Direction(..))
 import qualified Database.PostgreSQL.Simple as PG
 import qualified Database.PostgreSQL.Simple.Time as PGTime
 import Numeric (showOct)
-import System.Directory (listDirectory, setCurrentDirectory)
+import System.Directory (listDirectory, setCurrentDirectory, createDirectory, setModificationTime)
 import System.Environment (getArgs)
 import System.FilePath
 import System.Posix.Files
@@ -141,6 +142,46 @@ commit [dbdir, name, dir] = do
     PG.close pgc
 
 
+checkoutFile :: FilePath -> LevelDB.DB -> (String, Int, Int, Int, UTCTime, Maybe Int, Maybe ByteString.ByteString) -> IO ()
+checkoutFile base ldb (_:path, mode, uid, gid, mtime, _, Just blob)
+    | fileType == regularFileMode = do
+        Just contents <- LevelDB.get ldb def blob
+        ByteString.writeFile realpath contents
+        setOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+        setModificationTime realpath mtime
+    | fileType == symbolicLinkMode = do
+        Just contents <- LevelDB.get ldb def blob
+        createSymbolicLink realpath (C.unpack contents)
+        setSymbolicLinkOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+    where realpath = (combine base path)
+          fmode = toEnum mode
+          fileType = (.&.) fmode fileTypeModes
+checkoutFile base ldb (_:path, mode, uid, gid, mtime, Nothing, Nothing) = do
+    createDirectory realpath
+    setOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+    setModificationTime realpath mtime
+    putStrLn $ "checkout " ++ (combine base path)
+    where realpath = (combine base path)
+checkoutFile base ldb (_:path, mode, uid, gid, mtime, Just rdev, Nothing) = do
+    createDevice realpath (toEnum mode) (toEnum rdev)
+    where realpath = (combine base path)
+
+
+checkout :: [String] -> IO ()
+checkout [dbdir, name, dir] = do
+    ldb <- LevelDB.open dbdir def{createIfMissing=True}
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+
+    [PG.Only id] <- PG.query pgc "SELECT id FROM systems WHERE name = ?" [name]
+    putStrLn $ "Checking out system " ++ name ++ " - " ++ (show (id :: UUID))
+
+    PG.forEach pgc "SELECT path, mode, uid, gid, mtime, rdev, blob \
+        \FROM files WHERE system_id = ? ORDER BY path ASC" [id] $ checkoutFile dir ldb
+
+    unsafeClose ldb
+    PG.close pgc
+
+
 buildBlobList :: LevelDB.DB -> IO (BlobList)
 buildBlobList db = withIter db def $ \ iter ->
         SM.foldl' (flip HashSet.insert) (HashSet.empty :: BlobList)
@@ -171,6 +212,7 @@ listSystems [] = do
 
 dispatch :: [(String, [String] -> IO ())]
 dispatch =  [ ("commit", commit),
+              ("checkout", checkout),
               ("list-blobs", listBlobs),
               ("list-systems", listSystems)
             ]
