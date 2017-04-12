@@ -136,14 +136,14 @@ listBlobs [dbdir] = do
     unsafeClose db
 
 
-printSystems :: (UUID, String, PGTime.ZonedTimestamp) -> IO ()
-printSystems (id, name, commited_at) = do
-    putStrLn $ (show id) ++ " \"" ++ name ++ "\" " ++ (show commited_at)
+printSystems :: (UUID, String, PGTime.ZonedTimestamp, Int) -> IO ()
+printSystems (id, name, commited_at, file_count) = do
+    putStrLn $ (show id) ++ "  |  \"" ++ name ++ "\"  |  " ++ (show commited_at) ++ "  |  " ++ (show file_count) ++ " files"
 
 listSystems :: [String] -> IO ()
 listSystems [] = do
     pgc <- PG.connectPostgreSQL "dbname=dit"
-    PG.forEach_ pgc "SELECT id, name, commited_at FROM systems ORDER BY commited_AT ASC" printSystems
+    PG.forEach_ pgc "SELECT id, name, commited_at, (SELECT count(*) FROM files WHERE files.system_id = systems.id) FROM systems ORDER BY commited_AT ASC" printSystems
 
 
 dispatch :: [(String, [String] -> IO ())]
