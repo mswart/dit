@@ -169,7 +169,7 @@ checkoutFile base ldb (_:path, mode, uid, gid, mtime, Just rdev, Nothing) = do
 
 checkout :: [String] -> IO ()
 checkout [dbdir, name, dir] = do
-    ldb <- LevelDB.open dbdir def{createIfMissing=True}
+    ldb <- LevelDB.open dbdir def{createIfMissing=True, cacheSize=256*1024*1024}
     pgc <- PG.connectPostgreSQL "dbname=dit"
 
     [PG.Only id] <- PG.query pgc "SELECT id FROM systems WHERE name = ?" [name]
