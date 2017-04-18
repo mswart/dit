@@ -151,7 +151,7 @@ checkoutFile base ldb (_:path, mode, uid, gid, mtime, _, Just blob)
         setModificationTime realpath mtime
     | fileType == symbolicLinkMode = do
         Just contents <- LevelDB.get ldb def blob
-        createSymbolicLink realpath (C.unpack contents)
+        createSymbolicLink (C.unpack contents) realpath
         setSymbolicLinkOwnerAndGroup realpath (toEnum uid) (toEnum gid)
     where realpath = (combine base path)
           fmode = toEnum mode
