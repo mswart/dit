@@ -168,11 +168,12 @@ checkoutFile base ldb (_:path, mode, uid, gid, mtime, Just rdev, Nothing) = do
 
 
 checkout :: [String] -> IO ()
-checkout [dbdir, name, dir] = do
+checkout [dbdir, name_or_uuid, dir] = do
     ldb <- LevelDB.open dbdir def{createIfMissing=True, cacheSize=256*1024*1024}
     pgc <- PG.connectPostgreSQL "dbname=dit"
 
-    [PG.Only id] <- PG.query pgc "SELECT id FROM systems WHERE name = ?" [name]
+    ((id, name):_) <- PG.query pgc "SELECT id, name FROM systems \
+                   \ WHERE ? in (id::text, name)" [name_or_uuid]
     putStrLn $ "Checking out system " ++ name ++ " - " ++ (show (id :: UUID))
 
     createDirectoryIfMissing False dir
