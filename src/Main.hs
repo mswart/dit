@@ -148,6 +148,7 @@ checkoutFile base ldb (_:path, mode, uid, gid, mtime, _, Just blob)
         Just contents <- LevelDB.get ldb def blob
         ByteString.writeFile realpath contents
         setOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+        setFileMode realpath $ toEnum mode
         setModificationTime realpath mtime
     | fileType == symbolicLinkMode = do
         Just contents <- LevelDB.get ldb def blob
@@ -159,11 +160,14 @@ checkoutFile base ldb (_:path, mode, uid, gid, mtime, _, Just blob)
 checkoutFile base ldb (_:path, mode, uid, gid, mtime, Nothing, Nothing) = do
     createDirectory realpath
     setOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+    setFileMode realpath $ toEnum mode
     setModificationTime realpath mtime
-    putStrLn $ "checkout " ++ (combine base path)
     where realpath = (combine base path)
 checkoutFile base ldb (_:path, mode, uid, gid, mtime, Just rdev, Nothing) = do
     createDevice realpath (toEnum mode) (toEnum rdev)
+    setOwnerAndGroup realpath (toEnum uid) (toEnum gid)
+    setFileMode realpath $ toEnum mode
+    setModificationTime realpath mtime
     where realpath = (combine base path)
 
 
