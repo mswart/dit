@@ -5,6 +5,7 @@ import Data.ByteArray (convert)
 import Data.UUID.Types (UUID)
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime)
+import Data.Word (Word8)
 import Crypto.Hash (hash, Digest, SHA384)
 import Control.Monad.State as State
 import qualified Data.ByteString as ByteString
@@ -217,11 +218,27 @@ listSystems [] = do
         \FROM systems ORDER BY commited_AT ASC" printSystems
 
 
+pactDb :: [String] -> IO ()
+pactDb [dbdir] = do
+    ldb <- LevelDB.open dbdir def {cacheSize=256*1024*1024}
+    printDbSize ldb
+    putStrLn "Trigger compaction"
+    compactRange ldb range
+    printDbSize ldb
+  where
+    printDbSize ldb = do
+        s <- approximateSize ldb range
+        putStrLn $ "Approximate DB size: " ++ (show s)
+    range = (ByteString.singleton (toEnum 0 :: Word8), ByteString.singleton ((toEnum  255) :: Word8))
+
+
+
 dispatch :: [(String, [String] -> IO ())]
 dispatch =  [ ("commit", commit),
               ("checkout", checkout),
               ("list-blobs", listBlobs),
-              ("list-systems", listSystems)
+              ("list-systems", listSystems),
+              ("pack-db", pactDb)
             ]
 
 
