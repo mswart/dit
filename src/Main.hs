@@ -20,7 +20,7 @@ import Database.LevelDB.Streaming (keySlice, KeyRange(..), Direction(..))
 import qualified Database.PostgreSQL.Simple as PG
 import qualified Database.PostgreSQL.Simple.Time as PGTime
 import Numeric (showOct)
-import System.Directory (listDirectory, setCurrentDirectory, createDirectory, setModificationTime)
+import System.Directory (listDirectory, setCurrentDirectory, createDirectory, createDirectoryIfMissing, setModificationTime)
 import System.Environment (getArgs)
 import System.FilePath
 import System.Posix.Files
@@ -175,8 +175,10 @@ checkout [dbdir, name, dir] = do
     [PG.Only id] <- PG.query pgc "SELECT id FROM systems WHERE name = ?" [name]
     putStrLn $ "Checking out system " ++ name ++ " - " ++ (show (id :: UUID))
 
+    createDirectoryIfMissing False dir
+
     PG.forEach pgc "SELECT path, mode, uid, gid, mtime, rdev, blob \
-        \FROM files WHERE system_id = ? ORDER BY path ASC" [id] $ checkoutFile dir ldb
+        \FROM files WHERE system_id = ? AND path != '/' ORDER BY path ASC" [id] $ checkoutFile dir ldb
 
     unsafeClose ldb
     PG.close pgc
