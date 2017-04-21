@@ -257,7 +257,7 @@ checkoutArtefact [dbdir, system_id, artefact_id, dest] = do
 
 
 printArtefact :: [String] -> IO ()
-printArtefact [dbdir, system_id, artefact_id, dest] = do
+printArtefact [dbdir, system_id, artefact_id] = do
     ldb <- LevelDB.open dbdir def{cacheSize=256*1024*1024}
     pgc <- PG.connectPostgreSQL "dbname=dit"
 
