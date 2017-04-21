@@ -218,6 +218,62 @@ listSystems [] = do
         \FROM systems ORDER BY commited_AT ASC" printSystems
 
 
+addArtefact :: [String] -> IO ()
+addArtefact [dbdir, name_or_uuid, name, file] = do
+    ldb <- LevelDB.open dbdir def{cacheSize=256*1024*1024}
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+    contents <- ByteString.readFile file
+
+    [PG.Only system_id] <- PG.query pgc "SELECT id FROM systems \
+                   \ WHERE ? in (id::text, name)" [name_or_uuid]
+
+    let fileHash = convert (hash contents :: Digest SHA384)
+
+    LevelDB.put ldb def fileHash contents
+    [PG.Only id] <- PG.returning pgc "INSERT INTO artefacts (system_id, name, blob) \
+                                      \ VALUES (?, ?, ?) RETURNING id" [(system_id :: UUID, name, PG.Binary fileHash)]
+    putStrLn $ "Add artefact " ++ name ++ " (" ++ (show (id :: UUID)) ++ " to system " ++ name_or_uuid
+
+    unsafeClose ldb
+    PG.close pgc
+
+
+checkoutArtefact :: [String] -> IO ()
+checkoutArtefact [dbdir, system_id, artefact_id, dest] = do
+    ldb <- LevelDB.open dbdir def{cacheSize=256*1024*1024}
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+
+    [PG.Only blob] <- PG.query pgc "SELECT blob FROM artefacts \
+                    \ INNER JOIN systems ON artefacts.system_id = systems.id \
+                    \ WHERE ? in (systems.id::text, systems.name) \
+                    \   AND ? in (artefacts.id::text, artefacts.name)"
+                        [system_id, artefact_id]
+    PG.close pgc
+
+    Just contents <- LevelDB.get ldb def blob
+    unsafeClose ldb
+
+    ByteString.writeFile dest contents
+
+
+printArtefact :: [String] -> IO ()
+printArtefact [dbdir, system_id, artefact_id, dest] = do
+    ldb <- LevelDB.open dbdir def{cacheSize=256*1024*1024}
+    pgc <- PG.connectPostgreSQL "dbname=dit"
+
+    [PG.Only blob] <- PG.query pgc "SELECT blob FROM artefacts \
+                    \ INNER JOIN systems ON artefacts.system_id = systems.id \
+                    \ WHERE ? in (systems.id::text, systems.name) \
+                    \   AND ? in (artefacts.id::text, artefacts.name)"
+                        [system_id, artefact_id]
+    PG.close pgc
+
+    Just contents <- LevelDB.get ldb def blob
+    unsafeClose ldb
+
+    ByteString.putStr contents
+
+
 pactDb :: [String] -> IO ()
 pactDb [dbdir] = do
     ldb <- LevelDB.open dbdir def {cacheSize=256*1024*1024}
@@ -238,6 +294,9 @@ dispatch =  [ ("commit", commit),
               ("checkout", checkout),
               ("list-blobs", listBlobs),
               ("list-systems", listSystems),
+              ("add-artefact", addArtefact),
+              ("checkout-artefact", checkoutArtefact),
+              ("print-artefact", printArtefact),
               ("pack-db", pactDb)
             ]
 

@@ -22,3 +22,12 @@ CREATE TABLE files (
 	PRIMARY KEY (id),
 	UNIQUE (system_id, path)
 );
+
+CREATE TABLE artefacts (
+	id uuid DEFAULT uuid_generate_v4() NOT NULL,
+	system_id uuid NOT NULL REFERENCES systems(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+	name character varying NOT NULL,
+	blob bytea NOT NULL,
+	PRIMARY KEY (id),
+	UNIQUE (system_id, name)
+);
